@@ -1,0 +1,5 @@
+# Used Tools
++ Vite
++ OpenSpec
+
+
