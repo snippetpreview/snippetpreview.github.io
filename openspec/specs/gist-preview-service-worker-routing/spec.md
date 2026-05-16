@@ -79,7 +79,8 @@ The landing page maintains three synchronized input/output fields:
 
 **Conventions**:
 - Helper: `normalizeFilePath(value)` → trim, remove leading `/`, return normalized path
-- Helper: `buildPreviewPath(gistId, filePath)` → `/gist.github/<encoded-id>/<encoded-path?>`
+ - Helper: `buildPreviewPath(gistId, filePath)` → `/gist.github/<encoded-id>/<encoded-path?>`.
+     - Note: When `filePath` is empty, implementations SHOULD emit a trailing slash: `/gist.github/<encoded-id>/` to preserve correct relative URL resolution for HTML documents.
 - Helper: `buildCanonicalGistUrl(gistId, filePath, username)` → `https://gist.github.com/<user?>/<id>#<path?>`
 - Helper: `parseCanonicalGistUrl(urlText)` → `{gistId, filePath, username}` or null
 - Helper: `log(level, message)` → append `[LEVEL TIMESTAMP] message` to log output
@@ -275,3 +276,14 @@ The system SHALL provide action buttons `go-to-github-gist`, `go-to-preview`, `c
 #### Scenario: Copy and reset actions
 - **WHEN** a user clicks either copy action or reset
 - **THEN** the system copies the corresponding URL to clipboard for copy actions, and clears all fields for reset
+
+## Trailing-Slash Redirect Behavior
+
+To ensure relative URLs inside fetched HTML documents resolve correctly, the provider adapter SHALL redirect navigation requests that target an HTML preview but lack a trailing slash.
+
+- **WHEN** the Service Worker delegates a navigation request to the GitHub provider and the provider determines the selected file is HTML, and the incoming request targets the gist resource root (i.e., no specific file path was requested) and the incoming request pathname does not end with `/`.
+- **THEN** the provider SHALL respond with a `302` redirect to the same URL with a trailing slash appended to the pathname (preserving query and hash), so that subsequent navigation requests resolve relative URLs against the directory-like base.
+
+Notes:
+- This behavior avoids mutating upstream HTML content and preserves canonical resolution semantics for relative resource references (scripts, styles, images, anchors).
+- Implementations SHOULD choose a conservative redirect status (e.g., `302`) to avoid inadvertently making a permanent canonical change for upstream links.

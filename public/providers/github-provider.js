@@ -111,7 +111,7 @@ export const githubProvider = {
     }
 
     const normalized = normalizeFilePath(String(filePath || '').trim())
-    const encodedPath = normalized ? `/${encodeURIComponent(normalized)}` : ''
+    const encodedPath = normalized ? `/${encodeURIComponent(normalized)}` : '/'
     return ok(`/gist.github/${encodeURIComponent(id)}${encodedPath}`)
   },
 
@@ -128,7 +128,7 @@ export const githubProvider = {
     return ok(`https://gist.github.com${path}${hash}`)
   },
 
-  async handlePreview({ resourceId, filePath }) {
+  async handlePreview({ resourceId, filePath, request }) {
     const apiUrl = `https://api.github.com/gists/${resourceId}`
     const meta = await fetchJson(apiUrl)
 
@@ -172,10 +172,28 @@ export const githubProvider = {
     const filename = fileEntry.filename || ''
     const isHtml = /\.(html?|xhtml)$/i.test(filename) || /<\s*html[\s>]/i.test(content)
     if (isHtml) {
+      // If the original navigation URL does not end with a trailing slash,
+      // redirect to the same path with a trailing slash so relative URLs
+      // inside the served HTML resolve correctly.
+      // Only redirect to a trailing slash when the incoming navigation
+      // targeted the gist resource root (no specific file requested). If
+      // a file path was requested (e.g. `/.../index.html`) do not redirect.
+      if (request && !requested) {
+        try {
+          const reqUrl = new URL(request.url)
+          if (!reqUrl.pathname.endsWith('/')) {
+            const newUrl = new URL(request.url)
+            newUrl.pathname = reqUrl.pathname + '/'
+            return Response.redirect(newUrl.href, 302)
+          }
+        } catch (e) {
+          // fall through to serving content if URL parsing fails
+        }
+      }
       return new Response(content, { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8' } })
     }
 
-    const wrapped = `<h1>${escapeHtml(filename)}</h1><pre>${escapeHtml(content)}</pre><p><a href=\"/\">← Back to home</a></p>`
+    const wrapped = `<h1>${escapeHtml(filename)}</h1><pre>${escapeHtml(content)}</pre><p><a href="/">← Back to home</a></p>`
     return makeHtmlResponse(filename || 'Gist Preview', wrapped, 200)
   }
 }

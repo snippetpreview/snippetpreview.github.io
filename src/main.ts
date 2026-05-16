@@ -49,11 +49,12 @@ app.innerHTML = `
     <output id="event-log" role="status" aria-live="polite"></output>
   </form>
 
-  <section id="examples">
+    <section id="examples">
     <h2>Examples</h2>
     <ul>
-      <li><a href="/gist.github/30b90f63285fdcdb5cef974a4970bd10">/gist.github/30b90f63285fdcdb5cef974a4970bd10</a></li>
-      <li><a href="/gist.github/30b90f63285fdcdb5cef974a4970bd10/index.html">/gist.github/30b90f63285fdcdb5cef974a4970bd10/index.html</a></li>
+
+      <li><a href="/gist.github/95e2c10538e95f565120c5ed6adf947d">/gist.github/95e2c10538e95f565120c5ed6adf947d</a></li>
+      <li><a href="/gist.github/95e2c10538e95f565120c5ed6adf947d/index.html">/gist.github/95e2c10538e95f565120c5ed6adf947d/index.html</a></li>
     </ul>
   </section>
 </main>
@@ -102,7 +103,7 @@ function buildPreviewPath(gistId: string, filePath: string): string {
     return ''
   }
   const normalized = normalizeFilePath(filePath)
-  const encodedPath = normalized ? `/${encodeURIComponent(normalized)}` : ''
+  const encodedPath = normalized ? `/${encodeURIComponent(normalized)}` : '/'
   return `/gist.github/${encodeURIComponent(id)}${encodedPath}`
 }
 
@@ -150,6 +151,24 @@ function parseCanonicalGistUrl(urlText: string): ParsedCanonical | null {
 
   const filePath = (url.hash || '').replace(/^#/, '').trim()
   return { gistId, filePath, username }
+}
+
+function parsePreviewUrl(urlText: string): ParsedCanonical | null {
+  let path = urlText.trim()
+  try {
+    const u = new URL(path)
+    path = u.pathname || ''
+  } catch {
+    // not an absolute URL — allow relative paths
+  }
+
+  const match = path.match(/^\/gist\.github\/([^/]+)(?:\/(.+))?\/?$/i)
+  if (!match) return null
+
+  const gistId = decodeURIComponent(match[1] || '').trim()
+  const filePath = match[2] ? decodeURIComponent(match[2]).trim() : ''
+  if (!gistId) return null
+  return { gistId, filePath, username: '' }
 }
 
 function syncFromIdAndPath(): void {
@@ -200,9 +219,12 @@ filePathInput.addEventListener('input', () => {
 githubUrlInput.addEventListener('input', () => {
   clearDecomposeTimer()
   decomposeTimer = window.setTimeout(() => {
-    const parsed = parseCanonicalGistUrl(githubUrlInput.value.trim())
+    let parsed = parseCanonicalGistUrl(githubUrlInput.value.trim())
     if (!parsed) {
-      log('error', 'Malformed GitHub gist URL. Expected gist.github.com URL.')
+      parsed = parsePreviewUrl(githubUrlInput.value.trim())
+    }
+    if (!parsed) {
+      log('error', 'Malformed GitHub gist URL. Expected gist.github.com or /gist.github/ preview URL.')
       return
     }
 

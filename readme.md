@@ -19,7 +19,7 @@ This project was built to avoid those limitations while still staying fully stat
 
 The site publishes a root-level preview namespace such as:
 
-- `/gist.github/<gist-id>`
+- `/gist.github/<gist-id>/`
 - `/gist.github/<gist-id>/<file-path>`
 
 When the browser navigates to one of those paths, the Service Worker intercepts the request, asks the matching provider adapter to resolve it, and returns the rendered preview response.
