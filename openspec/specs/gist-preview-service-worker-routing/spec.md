@@ -1,6 +1,6 @@
 ## Purpose
 
-Snippet Preview is a static GitHub Pages app that serves GitHub Gist previews from provider-namespaced URLs (`/gist.github/<gist-id>/<file-path?>`) while preserving a stable browser document for extension compatibility. The landing page provides a user-friendly interface for composing and decomposing GitHub Gist URLs with synchronized input/output fields and explicit action controls. The Service Worker acts as a transparent routing layer, intercepting preview navigations and returning the requested gist file or an error page—without modifying the document structure.
+Snippet Preview is a static GitHub Pages app that serves GitHub Gist previews from provider-namespaced URLs (`/gist.github/<gist-id>/<file-path?>`) while preserving a stable browser document for extension compatibility. The landing page provides a user-friendly interface for composing and decomposing GitHub Gist URLs with synchronized input/output fields and explicit action controls. The Service Worker acts as a routing layer, intercepting preview requests and returning the requested gist file or an error page. Served documents keep their own structure; the only addition is a source declaration in the document head.
 
 ## Design Intention
 
@@ -19,7 +19,7 @@ The Service Worker remains provider-agnostic through a provider adapter pattern 
 The app is a two-part static system:
 
 1. **Landing Page** (`index.html` + `src/main.ts`): Provides synchronized input/output fields for composing and decomposing GitHub Gist URLs, with explicit action buttons for navigation and clipboard operations.
-2. **Service Worker** (`public/service-worker.js`): Intercepts provider-namespaced preview navigations, delegates to provider adapters (see **provider-routed-preview** spec), and manages preview routing.
+2. **Service Worker** (`src/service-worker.ts`): Serves provider-namespaced preview requests by resolving cached provider resources and rendering responses, and manages preview routing and the offline app shell (see **provider-routed-preview** spec).
 
 ### URL Correspondence (Provider-Namespaced)
 
@@ -86,28 +86,31 @@ The landing page maintains three synchronized input/output fields:
 - Helper: `log(level, message)` → append `[LEVEL TIMESTAMP] message` to log output
 - Helper: `syncFromIdAndPath()` → recompute both outputs from current ID and path
 
-### Service Worker (`public/service-worker.js`)
+### Service Worker (`src/service-worker.ts`)
 
-**Responsibility**: Intercept provider-namespaced preview navigations and delegate to appropriate provider adapters (detailed in **provider-routed-preview** spec).
+**Responsibility**: Serve provider-namespaced preview requests by resolving the resource through the cache layer and delegating rendering to the matching provider adapter (detailed in **provider-routed-preview** spec).
 
-**Input**: HTTP fetch event with method `navigate`
+**Input**: Same-origin HTTP fetch event whose pathname falls under a registered provider namespace, for any navigation mode.
 
 **Output**: HTTP Response object containing either:
-- Complete HTML document (from provider adapter preview response)
+- Complete HTML document for a navigation
+- Raw file content with a MIME type derived from the file extension for a subresource
 - Pass-through to network for non-preview paths
 
 **Constraints**:
-- Must register with `type: 'module'` to support ES6 imports of provider adapters
-- Route dispatch: Try each provider adapter's `parsePreviewPath()` in order; on first match, call adapter's `handlePreview()`
-- Non-matching paths pass through to normal network handling
-- No caching strategy in MVP
+- The worker is bundled by the build (Workbox `injectManifest`, IIFE output), so provider adapters are compiled modules rather than fetched assets
+- Route dispatch: Try each provider adapter's `parsePreviewPath()` in order; on first match, resolve the resource and render it
+- Non-matching paths pass through to normal network handling; there is no catch-all navigation fallback, so unknown paths still reach the site's not-found document
+- Navigations revalidate the cached resource; subresources are served from the cache without revalidation
+- The app shell and built assets are precached, and URL parameters are ignored when matching precached entries
 
 **Conventions**:
-- Import provider adapters: `import { githubProvider } from './providers/github-provider.js'`
+- Import provider adapters: `import { githubProvider } from './providers/github-provider'`
 - Provider registry: `const providers = [githubProvider]` (extensible for future providers)
-- Route dispatch pattern: `for (const provider of providers) { const parseResult = provider.parsePreviewPath(pathname); if (parseResult.ok) { return provider.handlePreview(parseResult.value); } }`
+- Route dispatch pattern: `for (const provider of providers) { const parsed = provider.parsePreviewPath(url.pathname); if (parsed.ok) { event.respondWith(servePreview(provider, parsed.value, request)); return } }`
+- `servePreview` resolves the resource through the cache and delegates to `render()` for navigations or `renderAsset()` for subresources
 
-### GitHub Provider Adapter (`public/providers/github-provider.js`)
+### GitHub Provider Adapter (`src/providers/github-provider.ts`)
 
 **Responsibility**: Implement provider adapter contract for GitHub Gists (see **provider-routed-preview** spec for contract details).
 
@@ -116,12 +119,15 @@ The landing page maintains three synchronized input/output fields:
 - `parseCanonicalUrl(urlText)`: Decompose `gist.github.com` URLs to extract resource ID, file path, and username
 - `buildPreviewPath({resourceId, filePath})`: Compose `/gist.github/<id>/<encoded-path?>` routes
 - `buildCanonicalUrl({resourceId, filePath, username})`: Compose `https://gist.github.com/<user?>/<id>#<path?>`
-- `handlePreview({resourceId, filePath})`: Fetch GitHub API, resolve file content, return HTML Response
+- `handlePreview({resourceId, filePath})`: Composition of `fetchResource` and `render`, retained for direct dispatch
+- `fetchResource({resourceId, etag})`: Return provider files, metadata, revision, and validator for caching
+- `render({resource, filePath, request})`: Build a preview document from fetched data without network access
+- `renderAsset({resource, filePath})`: Return a single file with its extension-derived MIME type
 
 **Constraints**:
 - GitHub API endpoint: `https://api.github.com/gists/<gist-id>`
 - Must detect truncated files (check `truncated` flag) and fetch from `raw_url` if needed
-- HTML content returned as-is; non-HTML content wrapped in `<pre>` tag
+- HTML content is returned with a `DC.source` declaration added to its head; non-HTML content is rendered in a styled source viewer with a copy control
 - Error responses must include GitHub API error details
 
 **Conventions**:
@@ -172,19 +178,24 @@ User clicks go-to-preview button or navigates to /gist.github/123/file.html
     ↓
 Browser navigates to /gist.github/<gist-id>/<file-path>
     ↓
-Service Worker fetch event intercepts (mode=navigate)
+Service Worker fetch event intercepts (any request mode)
     ↓
 Service Worker attempts parsePreviewPath() on each provider in registry
     ↓
 GitHub adapter matches /gist.github/... pattern
     ↓
-Service Worker calls githubProvider.handlePreview({resourceId, filePath})
+Service Worker resolves the resource through the cache:
+    - Cached entry revalidated with If-None-Match on navigations
+    - Cached entry served directly for subresources and when offline
     ↓
-GitHub Adapter:
+MISS → GitHub Adapter:
     - Fetches https://api.github.com/gists/<gist-id>
     - Selects file by name or first available
     - If truncated, fetches raw content from GitHub
-    - Returns complete HTML Response
+    - Stores the resource and returns its files
+    ↓
+Navigation → render() (document + DC.source declaration)
+Subresource → renderAsset() (file bytes + extension-derived type)
     ↓
 Browser renders document
 ```
@@ -193,12 +204,12 @@ Browser renders document
 
 - **GitHub API**: Uses unauthenticated endpoint (60 req/hour limit). Rate-limit errors must be caught and reported to user via log output.
 - **File Size**: Large files may be truncated by GitHub. Check `truncated` flag and fetch from `raw_url` if needed.
-- **Content Type**: Files can be any type (HTML, CSS, JavaScript, text, binary). Only HTML files are returned as-is; others are wrapped in a `<pre>` tag.
+- **Content Type**: Files can be any type (HTML, CSS, JavaScript, text, binary). HTML files are served as documents with a source declaration added; others are rendered in a styled source viewer.
 - **Path Encoding**: File paths containing special characters must be URI-encoded in preview URLs (e.g., `spaces` → `%20`).
 - **Provider Namespace**: All preview routes must use `/gist.github/` prefix; legacy non-namespaced paths (`/<gist-id>/...`) are not supported as a breaking change.
 - **Username Retention**: Landing page retains parsed username from successful URL decomposition to improve subsequent GitHub URL compositions.
 - **Debounce Strategy**: URL decomposition waits 1.5 seconds after user finishes editing to avoid excessive parsing during typing.
-- **No Caching**: MVP does not implement any cache strategy. All requests go to network first.
+- **Caching**: Provider resources are persisted in IndexedDB keyed by provider and resource identifier, with the provider revision stored as a field. Cached resources are revalidated with `If-None-Match` before replacement, and are served when the provider is unreachable. See **gist-resource-cache** and **cache-management-ui**.
 - **Extension Compatibility**: Must return a complete, stable HTML document that extensions can attach to immediately.
 - **Accessibility**: All user actions (navigation, copy, reset) exposed as explicit buttons rather than implicit form submission. Log output uses severity labels for clarity.
 - **Structured Logging**: User-facing feedback recorded with timestamps and severity (info/warning/error) instead of modal alerts.
@@ -227,7 +238,7 @@ The system SHALL provide a landing page with three synchronized GitHub fields: `
 
 ### Requirement: Gist preview URLs return complete HTML documents
 
-The system SHALL recognize GitHub gist preview paths in the form `/gist.github/<gist-id>/<file-path?>`, SHALL fetch gist metadata from GitHub's API, SHALL select the requested file or the first available file when no file is specified, and SHALL return a complete HTML document. If the selected file content is truncated, the system SHALL fetch the file's raw content before responding.
+The system SHALL recognize GitHub gist preview paths in the form `/gist.github/<gist-id>/<file-path?>`, SHALL serve the requested file or the first available file when no file is specified, and SHALL return a complete HTML document. The system SHALL prefer a cached resource when the provider reports it unchanged, and SHALL fetch gist metadata from GitHub's API when no cached resource exists or the cached resource has changed. If the selected file content is truncated, the system SHALL fetch the file's raw content before responding.
 
 #### Scenario: Preview the first gist file from provider namespace
 - **WHEN** a user visits `/gist.github/<gist-id>` for a valid gist
@@ -240,6 +251,86 @@ The system SHALL recognize GitHub gist preview paths in the form `/gist.github/<
 #### Scenario: Preview URL encodes file path while input remains readable
 - **WHEN** a user enters a human-readable `filePath`
 - **THEN** the system keeps `filePath` readable in the field and uses encoded form for the `preview-url`
+
+#### Scenario: Cached resource serves the preview without re-downloading
+- **WHEN** a user visits a preview path for a gist whose cached revision is still current
+- **THEN** the system returns the preview rendered from the cached resource without downloading the gist again
+
+#### Scenario: Cached resource serves the preview while offline
+- **WHEN** a user visits a preview path for a cached gist while the provider is unreachable
+- **THEN** the system returns the preview rendered from the cached resource
+
+### Requirement: Preview subresource requests resolve to gist files
+
+The system SHALL resolve requests under a provider namespace to that resource's files regardless of the request's navigation mode, so that a previewed document can load its own relative assets.
+
+#### Scenario: Relative stylesheet loads from the gist
+- **WHEN** a previewed HTML document requests `./style.css` and the gist contains that file
+- **THEN** the system returns that file's content with a stylesheet content type
+
+#### Scenario: Relative script loads from the gist
+- **WHEN** a previewed HTML document requests a script that the gist contains
+- **THEN** the system returns that file's content with a script content type
+
+#### Scenario: Request mode does not change resolution
+- **WHEN** the same gist file is requested as a navigation and as a subresource
+- **THEN** both requests resolve to the same cached or fetched file content
+
+### Requirement: Missing gist files return not-found responses
+
+The system SHALL return a not-found response when a specific file path is requested and does not exist in the resource, and SHALL NOT substitute another file.
+
+#### Scenario: Missing asset does not return the first file
+- **WHEN** a subresource request names a file that the gist does not contain
+- **THEN** the system responds with a not-found status rather than the contents of a different file
+
+#### Scenario: Root request still falls back to the first file
+- **WHEN** a preview request names no file at all
+- **THEN** the system serves the first available file
+
+### Requirement: Wrapped source documents present source affordances
+
+When a non-HTML gist file is served inside a generated document, the system SHALL present the content in a styled source container that provides a copy action, and SHALL display the source address verbatim immediately above that container.
+
+#### Scenario: Verbatim address precedes the source container
+- **WHEN** the system serves a non-HTML gist file
+- **THEN** the page shows `https://gist.githubusercontent.com/<username>/<gist-id>/raw/<file-path>` as an anchor above the source container
+
+#### Scenario: Copy action writes the exact source
+- **WHEN** the user activates the copy control
+- **THEN** the clipboard receives the file's exact source text and the control confirms the copy briefly
+
+#### Scenario: Long content remains readable
+- **WHEN** the file contains long lines or many lines
+- **THEN** the source container scrolls independently of the page
+
+#### Scenario: HTML gist files are unaffected
+- **WHEN** the served file is HTML
+- **THEN** the gist's own document is returned with only the source declaration added
+
+### Requirement: Served preview documents declare their source
+
+Every preview document the system returns SHALL declare its source in the document head as `<meta name="DC.source" scheme="URI" content="<source-url>">`, where the source URL identifies the exact gist file being served.
+
+#### Scenario: HTML gist file is annotated
+- **WHEN** the system serves a gist file as an HTML document
+- **THEN** the served document's head begins with a `DC.source` declaration whose content is the raw content URL of that file
+
+#### Scenario: Wrapped source document is annotated
+- **WHEN** the system serves a non-HTML gist file inside a generated document
+- **THEN** the generated head carries the same `DC.source` declaration for that file
+
+#### Scenario: Root request identifies the served file
+- **WHEN** the request names no file and the system resolves to the first available file
+- **THEN** the declaration identifies that file rather than the empty path
+
+#### Scenario: Existing declaration is preserved
+- **WHEN** the gist's own HTML already declares a `DC.source` meta element
+- **THEN** the system does not add a second declaration and leaves the document's head unchanged
+
+#### Scenario: Non-document responses are not modified
+- **WHEN** the system serves a subresource such as a stylesheet or script
+- **THEN** the file content is returned unmodified without injected markup
 
 ### Requirement: Legacy non-namespaced gist paths are removed
 

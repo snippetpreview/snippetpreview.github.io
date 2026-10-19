@@ -55,21 +55,32 @@ Each provider adapter MUST expose:
    - Returns `https://provider.namespace/username?/resource-id#file?`
    - Includes username when known, omits when unavailable
 
-5. **`handlePreview({resourceId, filePath})`** → `Promise<Response>`
-   - Fetches provider API, resolves file content, returns complete HTML document
-   - Returns HTTP 2xx Response for valid previews
+5. **`fetchResource({resourceId, etag?})`** → `Promise<ResourceOutcome>`
+   - Fetches provider data and returns files, metadata, revision, and validator
+   - Returns an `unchanged` outcome when the supplied validator still matches
+   - Never produces a response body and never caches; the router owns caching
+
+6. **`render({resource, filePath?, request?})`** → `Response`
+   - Builds a preview document solely from the supplied resource
+   - Declares the served file's source in the document head
+
+7. **`renderAsset({resource, filePath?})`** → `Response`
+   - Returns a single file with an extension-derived content type
+
+8. **`handlePreview({resourceId, filePath?})`** → `Promise<Response>`
+   - Composition of `fetchResource` and `render`, retained for direct dispatch
    - Returns HTTP 4xx/5xx error Response for missing resources or provider errors
    - Never mutates application state
 
 ### Service Worker Routing
 
 ```
-Navigation Request
+Preview Request (any mode)
     ↓
 Loop through Provider Registry
     ├─→ Try parsePreviewPath() on each provider
-    │   If match found, call handlePreview()
-    │   Return Response
+    │   If match found, resolve the resource through the cache
+    │   Render the document or the asset, return Response
     │
 └─→ No provider matched
     Pass request to network (normal routing)
@@ -106,30 +117,32 @@ Loop through Provider Registry
 
 **Constraints**:
 - Must try adapters in order until one matches
-- Must register with `type: 'module'` to support ES6 imports
-- Must not cache provider responses
+- Adapters are compiled into the service worker by the build, so they are imported as modules rather than fetched as assets
+- Caching belongs to the router; adapters return data and must not cache
 
 **Conventions**:
 - Provider registry: `const providers = [githubProvider, gitlabProvider, ...]`
-- Route matching: `for (const provider of providers) { const result = provider.parsePreviewPath(pathname); if (result.ok) return provider.handlePreview(result.value); }`
+- Route matching: `for (const provider of providers) { const parsed = provider.parsePreviewPath(pathname); if (parsed.ok) return resolveAndRender(provider, parsed.value) }`, where `resolveAndRender` consults the cache before delegating to `render` or `renderAsset`
 
 ## Data Flow
 
 ```
 User navigates to /gist.github/123/file.html
     ↓
-Service Worker fetch event intercepts (mode=navigate)
+Service Worker fetch event intercepts (any request mode)
     ↓
 Loop through providers:
     → githubProvider.parsePreviewPath() matches
     ✓ Returns {ok: true, value: {resourceId: '123', filePath: 'file.html'}}
     ↓
-Service Worker calls githubProvider.handlePreview({resourceId, filePath})
+Service Worker resolves the resource through the cache, then delegates:
+    - navigate    → githubProvider.render({resource, filePath, request})
+    - subresource → githubProvider.renderAsset({resource, filePath})
     ↓
-GitHub Adapter:
+GitHub Adapter (on a cache miss):
+    - githubProvider.fetchResource({resourceId})
     - Fetches https://api.github.com/gists/123
-    - Extracts file content
-    - Returns complete HTML Response
+    - Extracts file content, revision, and validator
     ↓
 Browser renders document
 ```
@@ -138,19 +151,23 @@ Browser renders document
 
 ### Requirement: Service worker dispatches preview requests through provider adapters
 
-The system SHALL define a provider adapter contract and SHALL dispatch provider-namespaced preview requests through adapter implementations instead of embedding source-specific logic in the generic Service Worker routing flow.
+The system SHALL define a provider adapter contract and SHALL dispatch provider-namespaced preview requests through adapter implementations instead of embedding source-specific logic in the generic Service Worker routing flow. Dispatch SHALL apply to every request under a provider namespace, including navigations and subresource requests.
 
 #### Scenario: Service worker delegates GitHub namespace to matching adapter
 - **WHEN** a navigation request path matches `/gist.github/<resource-id>/<file-path?>`
 - **THEN** the Service Worker selects the GitHub adapter and delegates preview response generation to that adapter
 
+#### Scenario: Subresource requests are delegated to the matching adapter
+- **WHEN** a subresource request path falls under `/gist.github/<resource-id>/`
+- **THEN** the Service Worker delegates to the GitHub adapter instead of passing the request to the network
+
 #### Scenario: Service worker remains provider-agnostic for non-matching namespaces
-- **WHEN** a navigation request path does not match any registered provider namespace
+- **WHEN** a request path does not match any registered provider namespace
 - **THEN** the Service Worker passes the request through normal network handling
 
 ### Requirement: Provider adapter contract covers parse, compose, and preview response behavior
 
-The system SHALL require each provider adapter to expose route matching, preview-path parsing, canonical-source URL parsing/composition, and preview response generation operations with explicit success/failure outputs.
+The system SHALL require each provider adapter to expose route matching, preview-path parsing, canonical-source URL parsing/composition, resource fetching, and response rendering operations with explicit success/failure outputs. Resource fetching SHALL be separable from rendering so that fetched data can be cached and rendered independently.
 
 #### Scenario: Adapter parse failure does not mutate unrelated state
 - **WHEN** provider URL parsing fails in adapter logic
@@ -159,6 +176,18 @@ The system SHALL require each provider adapter to expose route matching, preview
 #### Scenario: Adapter preview handler returns complete HTTP response
 - **WHEN** the Service Worker calls adapter preview handling with a parsed resource identifier
 - **THEN** the adapter returns an HTTP `Response` representing either rendered preview content or an error page
+
+#### Scenario: Resource fetch returns data without rendering
+- **WHEN** the Service Worker calls adapter resource fetching for a provider resource
+- **THEN** the adapter returns the resource's files, metadata, revision, and validator without producing an HTTP response body
+
+#### Scenario: Renderer is pure
+- **WHEN** the adapter renders a resource for a given file path
+- **THEN** it produces the response solely from the supplied resource data without performing network access
+
+#### Scenario: Revision is provider-defined and opaque to consumers
+- **WHEN** the adapter reports a revision for a fetched resource
+- **THEN** consumers store and compare that value without interpreting its format
 
 ### Requirement: Provider registration is extensible without changing route-dispatch semantics
 

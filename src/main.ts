@@ -1,4 +1,7 @@
 import './style.css'
+import { githubProvider } from './providers/github-provider'
+import { resumePendingPreview } from './resume'
+import type { ResumeResult } from './resume'
 
 const app = document.querySelector<HTMLDivElement>('#app')!
 
@@ -6,6 +9,8 @@ app.innerHTML = `
 <main id="preview-root">
   <h1>HTML Snippet Preview</h1>
   <p>Compose and preview GitHub Gist routes with provider namespace support.</p>
+
+  <section id="resume-status" class="resume-status" hidden aria-live="polite"></section>
 
   <form id="preview-form" aria-label="GitHub gist preview form">
     <div class="row-fields">
@@ -57,6 +62,8 @@ app.innerHTML = `
       <li><a href="/gist.github/95e2c10538e95f565120c5ed6adf947d/index.html">/gist.github/95e2c10538e95f565120c5ed6adf947d/index.html</a></li>
     </ul>
   </section>
+
+  <p class="site-nav"><a href="/cache.html">Cached previews</a></p>
 </main>
 `
 
@@ -84,73 +91,31 @@ const resetButton = document.getElementById('reset-form') as HTMLButtonElement
 let knownUsername = ''
 let decomposeTimer: number | undefined
 
-function normalizeFilePath(value: string): string {
-  const trimmed = value.trim()
-  if (!trimmed) {
-    return ''
-  }
-  return trimmed.startsWith('/') ? trimmed.slice(1) : trimmed
-}
-
 function log(level: LogLevel, message: string): void {
   const time = new Date().toLocaleTimeString()
   logOutput.value = `[${level.toUpperCase()} ${time}] ${message}`
 }
 
 function buildPreviewPath(gistId: string, filePath: string): string {
-  const id = gistId.trim()
-  if (!id) {
-    return ''
-  }
-  const normalized = normalizeFilePath(filePath)
-  const encodedPath = normalized ? `/${encodeURIComponent(normalized)}` : '/'
-  return `/gist.github/${encodeURIComponent(id)}${encodedPath}`
+  const result = githubProvider.buildPreviewPath({ resourceId: gistId, filePath })
+  return result.ok ? result.value : ''
 }
 
 function buildCanonicalGistUrl(gistId: string, filePath: string, username: string): string {
-  const id = gistId.trim()
-  if (!id) {
-    return ''
-  }
-  const normalized = normalizeFilePath(filePath)
-  const hash = normalized ? `#${normalized}` : ''
-  const user = username.trim()
-  const path = user ? `/${user}/${id}` : `/${id}`
-  return `https://gist.github.com${path}${hash}`
+  const result = githubProvider.buildCanonicalUrl({ resourceId: gistId, filePath, username })
+  return result.ok ? result.value : ''
 }
 
 function parseCanonicalGistUrl(urlText: string): ParsedCanonical | null {
-  let url: URL
-  try {
-    url = new URL(urlText)
-  } catch {
+  const result = githubProvider.parseCanonicalUrl(urlText)
+  if (!result.ok) {
     return null
   }
-
-  if (url.host !== 'gist.github.com') {
-    return null
+  return {
+    gistId: result.value.resourceId,
+    filePath: result.value.filePath,
+    username: result.value.username
   }
-
-  const parts = url.pathname.split('/').filter(Boolean)
-  if (parts.length === 0) {
-    return null
-  }
-
-  let username = ''
-  let gistId = ''
-  if (parts.length >= 2) {
-    username = parts[0]
-    gistId = parts[1]
-  } else {
-    gistId = parts[0]
-  }
-
-  if (!gistId) {
-    return null
-  }
-
-  const filePath = (url.hash || '').replace(/^#/, '').trim()
-  return { gistId, filePath, username }
 }
 
 function parsePreviewUrl(urlText: string): ParsedCanonical | null {
@@ -162,13 +127,15 @@ function parsePreviewUrl(urlText: string): ParsedCanonical | null {
     // not an absolute URL — allow relative paths
   }
 
-  const match = path.match(/^\/gist\.github\/([^/]+)(?:\/(.+))?\/?$/i)
-  if (!match) return null
-
-  const gistId = decodeURIComponent(match[1] || '').trim()
-  const filePath = match[2] ? decodeURIComponent(match[2]).trim() : ''
-  if (!gistId) return null
-  return { gistId, filePath, username: '' }
+  const result = githubProvider.parsePreviewPath(path)
+  if (!result.ok) {
+    return null
+  }
+  return {
+    gistId: result.value.resourceId,
+    filePath: result.value.filePath,
+    username: ''
+  }
 }
 
 function syncFromIdAndPath(): void {
@@ -273,13 +240,57 @@ resetButton.addEventListener('click', () => {
 syncFromIdAndPath()
 log('info', 'Ready.')
 
-// Register the service worker at site root to intercept preview navigations
-if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('/service-worker.js', { scope: '/', type: 'module' })
-    .then((registration) => {
-      console.log('Service Worker registered:', registration.scope)
-    })
-    .catch((err) => {
-      console.warn('Service Worker registration failed:', err)
-    })
+const RESUME_MESSAGES: Record<Exclude<ResumeResult['outcome'], 'none' | 'resumed'>, string> = {
+  invalid: 'This preview address could not be understood, so nothing was restored.',
+  'already-attempted': 'This preview was already retried in this tab but could not be restored.',
+  'worker-unavailable':
+    'Previews are served by a service worker, which this browser or page load did not provide.',
+  timeout: 'The preview could not be restored because the service worker did not take control in time.'
 }
+
+function textNode(tag: 'p' | 'span', text: string): HTMLElement {
+  const node = document.createElement(tag)
+  node.textContent = text
+  return node
+}
+
+function showResumeFallback(result: ResumeResult): void {
+  const container = document.getElementById('resume-status')
+  if (!container || result.outcome === 'none' || result.outcome === 'resumed') {
+    return
+  }
+
+  container.hidden = false
+  container.replaceChildren(textNode('p', RESUME_MESSAGES[result.outcome]))
+
+  if (result.path) {
+    const parsed = githubProvider.parsePreviewPath(new URL(result.path, window.location.origin).pathname)
+    if (parsed.ok) {
+      const canonical = githubProvider.buildCanonicalUrl({ resourceId: parsed.value.resourceId })
+      if (canonical.ok) {
+        const link = document.createElement('a')
+        link.href = canonical.value
+        link.rel = 'noopener noreferrer'
+        link.textContent = 'Open this gist on GitHub instead'
+        container.append(link)
+      }
+    }
+  }
+}
+
+async function boot(): Promise<void> {
+  const resume = await resumePendingPreview()
+  showResumeFallback(resume)
+
+  // Register the service worker at site root to intercept preview navigations.
+  if (import.meta.env.PROD && 'serviceWorker' in navigator) {
+    try {
+      const registration = await navigator.serviceWorker.register('/service-worker.js', { scope: '/' })
+      log('info', `Service worker active for ${registration.scope}`)
+    } catch (error) {
+      log('warning', `Service worker registration failed: ${String(error)}`)
+    }
+  }
+}
+
+void boot()

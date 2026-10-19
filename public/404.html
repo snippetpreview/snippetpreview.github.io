@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="robots" content="noindex" />
+    <title>Preview not ready - Snippet Preview</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        font: 18px/1.45 system-ui, 'Segoe UI', Roboto, sans-serif;
+        --text: #6b6375;
+        --text-h: #08060d;
+        --bg: #fff;
+        --border: #e5e4e7;
+        --accent: #aa3bff;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --text: #9ca3af;
+          --text-h: #f3f4f6;
+          --bg: #16171d;
+          --border: #2e303a;
+          --accent: #c084fc;
+        }
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+      }
+      main {
+        max-width: 640px;
+        margin: 0 auto;
+        padding: 64px 24px;
+      }
+      h1 {
+        color: var(--text-h);
+        font-size: 32px;
+        font-weight: 500;
+        margin: 0 0 16px;
+      }
+      p {
+        margin: 0 0 12px;
+      }
+      a {
+        color: var(--accent);
+      }
+      code {
+        font-family: ui-monospace, Consolas, monospace;
+        font-size: 15px;
+        word-break: break-all;
+      }
+      .status {
+        margin-top: 32px;
+        padding: 12px 16px;
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        font-size: 15px;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1 id="title">Page not found</h1>
+      <p id="detail">The address <code id="requested"></code> is not available.</p>
+      <p><a href="/">Go to the composer</a></p>
+      <p class="status" id="status" hidden></p>
+    </main>
+    <script>
+      (function () {
+        // Keep this list aligned with the provider namespaces the service worker routes.
+        var PREVIEW_NAMESPACES = ['/gist.github/']
+        var path = location.pathname
+        var namespace = PREVIEW_NAMESPACES.find(function (prefix) {
+          return path.indexOf(prefix) === 0 && path.length > prefix.length
+        })
+
+        if (!namespace) {
+          document.getElementById('requested').textContent = path
+          return
+        }
+
+        var next = path + location.search + location.hash
+        var status = document.getElementById('status')
+        status.hidden = false
+        status.textContent = 'Preparing this preview…'
+
+        // A preview needs a service worker, which can only be installed by the app shell.
+        location.replace('/?next=' + encodeURIComponent(next))
+      })()
+    </script>
+  </body>
+</html>
