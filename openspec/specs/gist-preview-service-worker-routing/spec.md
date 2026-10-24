@@ -204,7 +204,7 @@ Browser renders document
 
 - **GitHub API**: Uses unauthenticated endpoint (60 req/hour limit). Rate-limit errors must be caught and reported to user via log output.
 - **File Size**: Large files may be truncated by GitHub. Check `truncated` flag and fetch from `raw_url` if needed.
-- **Content Type**: Files can be any type (HTML, CSS, JavaScript, text, binary). HTML files are served as documents with a source declaration added; others are rendered in a styled source viewer.
+- **Content Type**: Files can be any type (HTML, CSS, JavaScript, text, binary). HTML files are served as documents with a source declaration added; non-HTML, non-Markdown files are rendered in a styled source viewer; Markdown files are rendered as previews.
 - **Path Encoding**: File paths containing special characters must be URI-encoded in preview URLs (e.g., `spaces` → `%20`).
 - **Provider Namespace**: All preview routes must use `/gist.github/` prefix; legacy non-namespaced paths (`/<gist-id>/...`) are not supported as a breaking change.
 - **Username Retention**: Landing page retains parsed username from successful URL decomposition to improve subsequent GitHub URL compositions.
@@ -290,19 +290,23 @@ The system SHALL return a not-found response when a specific file path is reques
 
 ### Requirement: Wrapped source documents present source affordances
 
-When a non-HTML gist file is served inside a generated document, the system SHALL present the content in a styled source container that provides a copy action, and SHALL display the source address verbatim immediately above that container.
+When a non-HTML, non-Markdown gist file is served inside a generated document, the system SHALL present the content in a styled source container that provides a copy action, and SHALL display the source address verbatim immediately above that container. Markdown files SHALL instead use the Markdown preview requirements and SHALL retain a source address and copy action in their generated document. HTML files SHALL continue to be served as the gist's own document.
 
-#### Scenario: Verbatim address precedes the source container
-- **WHEN** the system serves a non-HTML gist file
+#### Scenario: Verbatim address precedes a raw source container
+- **WHEN** the system serves a non-HTML, non-Markdown gist file
 - **THEN** the page shows `https://gist.githubusercontent.com/<username>/<gist-id>/raw/<file-path>` as an anchor above the source container
 
-#### Scenario: Copy action writes the exact source
-- **WHEN** the user activates the copy control
+#### Scenario: Raw source copy action writes the exact source
+- **WHEN** the user activates the copy control for a non-HTML, non-Markdown file
 - **THEN** the clipboard receives the file's exact source text and the control confirms the copy briefly
 
-#### Scenario: Long content remains readable
-- **WHEN** the file contains long lines or many lines
+#### Scenario: Long raw content remains readable
+- **WHEN** a non-HTML, non-Markdown file contains long lines or many lines
 - **THEN** the source container scrolls independently of the page
+
+#### Scenario: Markdown uses a rendered document
+- **WHEN** the served file is Markdown
+- **THEN** the system renders a Markdown preview document with its source address and original-source copy action rather than the raw source container
 
 #### Scenario: HTML gist files are unaffected
 - **WHEN** the served file is HTML

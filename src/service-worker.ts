@@ -5,6 +5,7 @@ import { githubProvider } from './providers/github-provider'
 import type { ProviderAdapter, ParsedPreview } from './providers/provider-adapter'
 import { recordVisit } from './cache/resource-store'
 import { errorResponse, notCachedResponse, resolveResource } from './cache/preview-service'
+import { markdownRuntimeAssets } from './providers/markdown-view'
 
 declare global {
   interface WorkerGlobalScope {
@@ -15,6 +16,32 @@ declare global {
 const sw = self as unknown as ServiceWorkerGlobalScope
 
 const providers: ProviderAdapter[] = [githubProvider]
+const runtimeCacheName = 'snippet-preview-runtime-v1'
+
+async function handleRuntimeAsset(request: Request, upstream: string): Promise<Response> {
+  const cache = await caches.open(runtimeCacheName)
+  const cached = await cache.match(request)
+  if (cached) {
+    return cached
+  }
+
+  try {
+    const response = await fetch(upstream, { credentials: 'omit' })
+    if (!response.ok) {
+      return new Response(`Runtime asset unavailable: ${response.status}`, {
+        status: 502,
+        headers: { 'Content-Type': 'text/plain; charset=utf-8' }
+      })
+    }
+    await cache.put(request, response.clone())
+    return response
+  } catch (error) {
+    return new Response(`Runtime asset unavailable: ${String(error)}`, {
+      status: 502,
+      headers: { 'Content-Type': 'text/plain; charset=utf-8' }
+    })
+  }
+}
 
 sw.addEventListener('install', (event) => {
   event.waitUntil(sw.skipWaiting())
@@ -71,6 +98,13 @@ sw.addEventListener('fetch', (event) => {
 
   if (url.origin !== sw.location.origin) {
     return
+  }
+
+  for (const asset of Object.values(markdownRuntimeAssets)) {
+    if (url.pathname === asset.path) {
+      event.respondWith(handleRuntimeAsset(request, asset.upstream))
+      return
+    }
   }
 
   for (const provider of providers) {

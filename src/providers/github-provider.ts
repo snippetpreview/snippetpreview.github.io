@@ -13,6 +13,7 @@ import type {
 import { isHtmlPath, mimeForPath } from './mime'
 import { escapeHtml, injectSourceMeta, sourceMetaTag } from './html-meta'
 import { renderSourceView, sourceViewStyles } from './source-view'
+import { isMarkdownPath, markdownViewStyles, renderMarkdownView } from './markdown-view'
 
 const PREVIEW_REGEX = /^\/gist\.github\/([^/]+)(?:\/(.+))?\/?$/i
 const CANONICAL_HOST = 'gist.github.com'
@@ -258,6 +259,19 @@ function render({ resource, filePath, request }: RenderInput): Response {
   }
 
   const sourceUrl = buildSourceUrl(resource.resourceId, entry.filename || requested, resource.username)
+
+  if (isMarkdownPath(entry.filename)) {
+    return makeHtmlResponse(
+      entry.filename || 'Gist Markdown Preview',
+      renderMarkdownView({
+        filename: entry.filename || requested,
+        sourceUrl,
+        source: entry.content
+      }),
+      200,
+      `${sourceMetaTag(sourceUrl)}${markdownViewStyles()}`
+    )
+  }
 
   if (isHtmlPath(entry.filename) || /<\s*html[\s>]/i.test(entry.content)) {
     // If the original navigation URL does not end with a trailing slash,

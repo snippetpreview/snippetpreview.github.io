@@ -38,7 +38,9 @@ Every preview document declares the file it was served from as its first head el
 
 The value uses the raw content address because `gist.github.com/<user>/<id>/<file>` does not exist — GitHub selects files on the gist page with a `#file-...` fragment, which carries no real path. Gist HTML that already declares its own `DC.source` is left untouched, and subresource responses are never modified.
 
-HTML files are served as the gist's own document with only that declaration added. Everything else is presented in a small source viewer: the raw source address verbatim, a bordered code container with the media type, a **Copy** button, horizontal scrolling for long lines, and light/dark theming that follows the system.
+HTML files are served as the gist's own document with only that declaration added. Markdown files (`.md` and `.markdown`) are rendered as styled documentation previews with GFM tables, task lists, fenced code, relative links/images, and safe documentation HTML. TeX in `$...$`, `$$...$$`, `\(...\)`, and `\[...\]` delimiters is converted to MathML without requiring browser JavaScript. Mermaid diagrams and syntax highlighting load progressively through pinned, service-worker-cached runtimes; if either runtime is unavailable, the escaped source remains readable. Every Markdown preview retains the raw source address and a **Copy source** action.
+
+All other files are presented in a small source viewer: the raw source address verbatim, a bordered code container with the media type, a **Copy** button, horizontal scrolling for long lines, and light/dark theming that follows the system. Raw HTML in Markdown is sanitized with an explicit allowlist, so scripts, event handlers, executable styles, and unsafe URL schemes are removed.
 
 ## Cold Start and Offline Behavior
 
@@ -120,6 +122,7 @@ This project uses Vite and TypeScript.
 |---|---|
 | `npm run dev` | Vite dev server. The service worker is **not** registered, so preview routes behave as plain unknown paths. |
 | `npm run build` | Type-checks the app (`tsconfig.json`), type-checks the worker (`tsconfig.worker.json`), then builds `dist/` including `service-worker.js` and its precache manifest. |
+| `npm run check:markdown` | Runs deterministic worker-renderer checks for GFM, all supported math delimiters, sanitization, and progressive fallback markup. |
 | `npm run preview` | Serves the built output with `vite preview`. Does not emulate GitHub Pages' unknown-path behavior. |
 | `npm run preview:pages` | Serves `dist/` and returns `404.html` with a 404 status for unknown paths, like GitHub Pages. Add `-- --port 4180` for another port. |
 

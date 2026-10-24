@@ -4,5 +4,5 @@
     "lib": ["ES2023", "WebWorker"],
     "types": []
   },
-  "include": ["src/service-worker.ts", "src/providers/**/*", "src/cache/**/*"]
+  "include": ["src/service-worker.ts", "src/providers/**/*", "src/cache/**/*", "src/types/**/*"]
 }
