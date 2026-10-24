@@ -244,6 +244,24 @@ function buildSourceUrl(resourceId: string, filePath: string, username: string):
   return segments ? `${base}/${segments}` : base
 }
 
+function redirectRootRequest(request: Request | undefined, requested: string): Response | null {
+  if (!request || requested) {
+    return null
+  }
+
+  try {
+    const requestUrl = new URL(request.url)
+    if (requestUrl.pathname.endsWith('/')) {
+      return null
+    }
+
+    requestUrl.pathname = `${requestUrl.pathname}/`
+    return Response.redirect(requestUrl.href, 302)
+  } catch {
+    return null
+  }
+}
+
 function render({ resource, filePath, request }: RenderInput): Response {
   const keys = Object.keys(resource.files)
   if (keys.length === 0) {
@@ -261,6 +279,11 @@ function render({ resource, filePath, request }: RenderInput): Response {
   const sourceUrl = buildSourceUrl(resource.resourceId, entry.filename || requested, resource.username)
 
   if (isMarkdownPath(entry.filename)) {
+    const redirect = redirectRootRequest(request, requested)
+    if (redirect) {
+      return redirect
+    }
+
     return makeHtmlResponse(
       entry.filename || 'Gist Markdown Preview',
       renderMarkdownView({
@@ -280,17 +303,9 @@ function render({ resource, filePath, request }: RenderInput): Response {
     // Only redirect to a trailing slash when the incoming navigation
     // targeted the gist resource root (no specific file requested). If
     // a file path was requested (e.g. `/.../index.html`) do not redirect.
-    if (request && !requested) {
-      try {
-        const reqUrl = new URL(request.url)
-        if (!reqUrl.pathname.endsWith('/')) {
-          const newUrl = new URL(request.url)
-          newUrl.pathname = `${reqUrl.pathname}/`
-          return Response.redirect(newUrl.href, 302)
-        }
-      } catch {
-        // fall through to serving content if URL parsing fails
-      }
+    const redirect = redirectRootRequest(request, requested)
+    if (redirect) {
+      return redirect
     }
     return new Response(injectSourceMeta(entry.content, sourceUrl), { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8' } })
   }

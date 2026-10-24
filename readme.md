@@ -51,7 +51,7 @@ The app is installable and works offline:
 - the app shell (`/` and `/cache.html`) and its built assets are precached, so the installed app opens without a network;
 - visited gists are stored in IndexedDB and revalidated with `If-None-Match`, so an unchanged gist is served from cache without re-downloading it, and a cached gist still renders when the provider is unreachable.
 
-Cached gists can be inspected at [`/cache.html`](https://snippetpreview.github.io/cache.html), which lists what is stored, lets you download the rendered HTML or any file's raw source, open a file, or remove a gist.
+Cached gists can be inspected at [`/cache.html`](https://snippetpreview.github.io/cache.html), which lists what is stored, lets you download the complete rendered preview HTML or any file's raw source, open a file, or remove a gist. The downloaded Markdown preview includes the server-rendered MathML and readable Mermaid/code fallbacks; browser-only enhancements can run when the downloaded file is opened in an environment that can load the pinned runtimes.
 
 ## Main Interface
 
@@ -98,6 +98,7 @@ src/
     provider-adapter.ts     adapter contract and result types
     github-provider.ts      gist parsing, fetchResource, render, renderAsset
     html-meta.ts            DC.source injection
+    markdown-view.ts        sanitized Markdown, MathML, Mermaid, and highlighting
     source-view.ts          wrapped non-HTML source viewer
     mime.ts                 extension to content type
   cache/
@@ -111,6 +112,7 @@ public/
   favicon.svg
 
 scripts/
+  check-markdown-renderer.ts deterministic Markdown renderer checks
   serve-pages.mjs           static server with GitHub Pages 404 semantics
 ```
 
@@ -148,8 +150,10 @@ npm run preview:pages
 1. Open `/gist.github/<gist-id>/` — the preview should render even though the first request was a 404.
 2. Follow a relative link inside the gist — the second file should render from the same cached resource.
 3. Open `/cache.html` — the gist is listed with its revision, files, and sizes.
-4. Stop the server (or go offline) and reload — `/`, `/cache.html`, and the cached preview should all still load.
-5. Open a path outside every provider namespace — the real `404.html` should render, not the composer.
+4. Use **Download HTML** on the cached gist — the rendered document should download successfully and retain its Markdown content, source metadata, MathML, and fallbacks.
+5. Allow a Mermaid or highlighted code block to load once, then stop the server or go offline and reload — the cached runtime should enhance the preview; before first use offline, the readable source fallback should remain.
+6. Stop the server (or go offline) and reload — `/`, `/cache.html`, and the cached preview should all still load.
+7. Open a path outside every provider namespace — the real `404.html` should render, not the composer.
 
 PWA icons in `public/icons/` were generated from `public/icons/pwa-icon.svg` with:
 
