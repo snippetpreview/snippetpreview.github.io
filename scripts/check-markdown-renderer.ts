@@ -36,7 +36,8 @@ graph TD
 
 <details open><summary>More</summary><script>alert('bad')</script></details>
 
-[guide](./guide.md) ![image](./assets/image.png)`
+[guide](./guide.md) ![image](./assets/image.png)
+[bare guide](guide.md) ![bare image](assets/image.png) [bare file](docs/notes.md)`
 
 const html = renderMarkdownView({
   filename: 'README.md',
@@ -56,6 +57,9 @@ assert(html.includes('class="language-js"'), 'language class was not rendered')
 assert(html.includes('$not math$'), 'fenced code was altered')
 assert(html.includes('href="./guide.md"'), 'relative link was not preserved')
 assert(html.includes('src="./assets/image.png"'), 'relative image was not preserved')
+assert(html.includes('href="guide.md"'), 'bare relative link without a leading ./ was not preserved')
+assert(html.includes('src="assets/image.png"'), 'bare relative image without a leading ./ was not preserved')
+assert(html.includes('href="docs/notes.md"'), 'bare relative link with a directory prefix was not preserved')
 assert(html.includes('<details open>'), 'safe HTML was removed')
 assert(!html.includes('<script>alert'), 'unsafe script was preserved')
 assert(!html.includes('onclick='), 'event handler was preserved')
@@ -67,6 +71,15 @@ const unsafeHtml = renderMarkdownView({
 })
 
 assert(!unsafeHtml.includes('href="javascript:') && !unsafeHtml.includes('src="javascript:'), 'unsafe URL scheme was preserved')
+
+const obfuscatedUrlHtml = renderMarkdownView({
+  filename: 'obfuscated.md',
+  sourceUrl: 'https://gist.githubusercontent.com/user/id/raw/obfuscated.md',
+  source: '<a href="jav&#x09;ascript:alert(1)">x</a><a href="data:text/html,<b>x</b>">y</a>'
+})
+
+assert(!/href="[^"]*ascript:/i.test(obfuscatedUrlHtml), 'obfuscated URL scheme was preserved')
+assert(!obfuscatedUrlHtml.includes('href="data:'), 'unsafe data URL was preserved')
 
 const invalidMathHtml = renderMarkdownView({
   filename: 'invalid.md',

@@ -22,7 +22,7 @@ When the selected gist file has a Markdown extension, the system SHALL return a 
 
 ### Requirement: Markdown supports common documentation extensions
 
-The Markdown renderer SHALL support GFM-compatible tables, strikethrough, autolinks, task-list items, fenced code blocks, block quotes, ordered and unordered lists, headings, links, images, and inline code. Relative links and images SHALL remain relative to the preview namespace so the service worker can resolve files from the same gist.
+The Markdown renderer SHALL support GFM-compatible tables, strikethrough, autolinks, task-list items, fenced code blocks, block quotes, ordered and unordered lists, headings, links, images, and inline code. Relative links and images SHALL remain relative to the preview namespace, whether or not they carry a leading `./`, so the service worker can resolve files from the same gist.
 
 #### Scenario: GFM structures are rendered
 - **WHEN** Markdown contains a table, `~~strike~~`, an autolink, and a task-list item
@@ -31,6 +31,10 @@ The Markdown renderer SHALL support GFM-compatible tables, strikethrough, autoli
 #### Scenario: Relative assets use the gist namespace
 - **WHEN** Markdown contains `![diagram](./assets/diagram.png)` or `[details](./guide.md)`
 - **THEN** the rendered HTML preserves a relative URL that resolves beneath `/gist.github/<gist-id>/` rather than pointing to the application root or GitHub API
+
+#### Scenario: Relative URLs without a dot prefix are preserved
+- **WHEN** Markdown contains `[details](guide.md)` or `![diagram](assets/diagram.png)` without a leading `./`
+- **THEN** the rendered HTML keeps the authored URL in the `href`/`src` attribute instead of dropping it during sanitization
 
 #### Scenario: Fenced code remains code
 - **WHEN** Markdown contains a fenced block with Markdown, HTML, dollar signs, or Mermaid-like text

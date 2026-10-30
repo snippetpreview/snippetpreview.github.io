@@ -9,7 +9,12 @@ import { STATE } from 'mathjax-full/js/core/MathItem.js'
 import 'mathjax-full/js/input/tex/ams/AmsConfiguration.js'
 import 'mathjax-full/js/input/tex/newcommand/NewcommandConfiguration.js'
 import xss from 'xss'
+import type { ICSSFilter } from 'xss'
 import { escapeHtml } from './html-meta'
+
+// `xss` ships as CommonJS, so its helper exports are only reachable through the
+// default export object at runtime.
+const xssHelpers = xss as unknown as typeof import('xss')
 
 export interface MarkdownViewInput {
   filename: string
@@ -383,12 +388,40 @@ function createMarkdown(): MarkdownIt {
   return markdown
 }
 
+const URL_ATTRIBUTES = new Set(['href', 'src'])
+
+// A colon in the first path segment introduces a scheme, so `mailto:a@b` is a
+// scheme while `docs/guide.md` is a path.
+const ABSOLUTE_URL_PATTERN = /^[A-Za-z][A-Za-z0-9+.-]*:/
+const URL_NOISE_PATTERN = /[\u0000-\u0020\u007f-\u009f]+/g
+
+/**
+ * The library default keeps an `href`/`src` only when it starts with a known
+ * scheme, `/`, `#`, `./`, or `../`, so plain relative paths such as
+ * `guide.md` would lose their value. Restore those once they are proven to
+ * carry no scheme.
+ */
+function sanitizeUrlAttribute(tag: string, name: string, value: string, cssFilter: ICSSFilter): string {
+  const sanitized = xssHelpers.safeAttrValue(tag, name, value, cssFilter)
+  if (sanitized || !URL_ATTRIBUTES.has(name)) {
+    return sanitized
+  }
+
+  const candidate = xssHelpers.friendlyAttrValue(value).trim()
+  if (!candidate || ABSOLUTE_URL_PATTERN.test(candidate.replace(URL_NOISE_PATTERN, ''))) {
+    return ''
+  }
+
+  return xssHelpers.escapeAttrValue(candidate)
+}
+
 function sanitizeRenderedHtml(html: string): string {
   return xss(html, {
     whiteList: markdownAllowList,
     stripIgnoreTag: true,
     stripIgnoreTagBody: ['script', 'style', 'iframe', 'object', 'embed'],
-    css: false
+    css: false,
+    safeAttrValue: sanitizeUrlAttribute
   })
 }
 
