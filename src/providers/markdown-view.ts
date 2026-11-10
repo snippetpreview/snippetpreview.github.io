@@ -1,4 +1,6 @@
 import MarkdownIt from 'markdown-it'
+import type StateBlock from 'markdown-it/lib/rules_block/state_block.mjs'
+import type StateInline from 'markdown-it/lib/rules_inline/state_inline.mjs'
 import taskLists from 'markdown-it-task-lists'
 import { mathjax } from 'mathjax-full/js/mathjax.js'
 import { TeX } from 'mathjax-full/js/input/tex.js'
@@ -25,11 +27,6 @@ export interface MarkdownViewInput {
 interface MathPlaceholder {
   marker: string
   html: string
-}
-
-interface FenceState {
-  character: '`' | '~'
-  length: number
 }
 
 const MERMAID_RUNTIME_PATH = '/_runtime/mermaid-11.12.0.min.js'
@@ -169,21 +166,6 @@ function isEscaped(source: string, index: number): boolean {
   return backslashes % 2 === 1
 }
 
-function findClosing(source: string, delimiter: string, start: number): number {
-  let cursor = start
-  while (cursor < source.length) {
-    const found = source.indexOf(delimiter, cursor)
-    if (found < 0) {
-      return -1
-    }
-    if (!isEscaped(source, found)) {
-      return found
-    }
-    cursor = found + delimiter.length
-  }
-  return -1
-}
-
 function mathHtml(expression: string, display: boolean, fallback: string): string {
   try {
     const node = mathDocument.convert(expression, { display, end: STATE.CONVERT })
@@ -242,123 +224,144 @@ function normalizeMathMl(serialized: string, display: boolean): string {
   return `<span class="math-inline">${result}</span>`
 }
 
-function nextLineEnd(source: string, start: number): number {
-  const newline = source.indexOf('\n', start)
-  return newline < 0 ? source.length : newline
+interface MathCollector {
+  placeholders: MathPlaceholder[]
+  add(expression: string, display: boolean, fallback: string): string
 }
 
-function fenceAt(source: string, start: number): { character: '`' | '~'; length: number } | null {
-  const end = nextLineEnd(source, start)
-  const line = source.slice(start, end)
-  const match = /^ {0,3}(`{3,}|~{3,})/.exec(line)
-  if (!match) {
-    return null
-  }
-  return { character: match[1][0] as '`' | '~', length: match[1].length }
+interface MathDelimiter {
+  open: string
+  close: string
+  display: boolean
 }
 
-function isFenceClose(source: string, start: number, fence: FenceState): boolean {
-  const end = nextLineEnd(source, start)
-  const line = source.slice(start, end)
-  const expression = new RegExp(`^ {0,3}${fence.character}{${fence.length},} *$`)
-  return expression.test(line)
-}
+const INLINE_MATH_DELIMITERS: MathDelimiter[] = [
+  { open: '$$', close: '$$', display: true },
+  { open: '$', close: '$', display: false },
+  { open: '\\(', close: '\\)', display: false },
+  { open: '\\[', close: '\\]', display: true }
+]
 
-function replaceMath(source: string): { source: string; placeholders: MathPlaceholder[] } {
+const BLOCK_MATH_DELIMITERS: MathDelimiter[] = [
+  { open: '$$', close: '$$', display: true },
+  { open: '\\[', close: '\\]', display: true }
+]
+
+function createMathCollector(): MathCollector {
   const placeholders: MathPlaceholder[] = []
-  let result = ''
-  let cursor = 0
-  let lineStart = true
-  let fence: FenceState | null = null
-
-  const addPlaceholder = (end: number, expression: string, display: boolean, fallback: string): void => {
-    const marker = `SNIPPET_PREVIEW_MATH_${placeholders.length}`
-    placeholders.push({
-      marker,
-      html: mathHtml(expression, display, fallback)
-    })
-    result += marker
-    cursor = end
-    lineStart = false
+  return {
+    placeholders,
+    add(expression, display, fallback) {
+      const marker = `SNIPPET_PREVIEW_MATH_${placeholders.length}`
+      placeholders.push({ marker, html: mathHtml(expression, display, fallback) })
+      return marker
+    }
   }
+}
 
-  while (cursor < source.length) {
-    if (lineStart) {
-      if (fence) {
-        const end = nextLineEnd(source, cursor)
-        result += source.slice(cursor, end)
-        if (isFenceClose(source, cursor, fence)) {
-          fence = null
-        }
-        cursor = end
-        lineStart = false
-        continue
-      }
-      const openingFence = fenceAt(source, cursor)
-      if (openingFence) {
-        const end = nextLineEnd(source, cursor)
-        result += source.slice(cursor, end)
-        fence = openingFence
-        cursor = end
-        lineStart = false
-        continue
-      }
+function matchDelimiter(source: string, position: number, delimiters: MathDelimiter[]): MathDelimiter | null {
+  for (const delimiter of delimiters) {
+    if (source.startsWith(delimiter.open, position)) {
+      return delimiter
     }
-
-    if (source[cursor] === '\n') {
-      result += '\n'
-      cursor += 1
-      lineStart = true
-      continue
-    }
-
-    if (source[cursor] === '`') {
-      let length = 1
-      while (source[cursor + length] === '`') {
-        length += 1
-      }
-      const delimiter = '`'.repeat(length)
-      const closing = source.indexOf(delimiter, cursor + length)
-      if (closing >= 0) {
-        const end = closing + length
-        result += source.slice(cursor, end)
-        cursor = end
-        lineStart = false
-        continue
-      }
-    }
-
-    const displayDelimiter = source.startsWith('$$', cursor) ? '$$' : source.startsWith('\\[', cursor) ? '\\[' : null
-    if (displayDelimiter && !isEscaped(source, cursor)) {
-      const closingDelimiter = displayDelimiter === '$$' ? '$$' : '\\]'
-      const closing = findClosing(source, closingDelimiter, cursor + displayDelimiter.length)
-      if (closing >= 0) {
-        const expression = source.slice(cursor + displayDelimiter.length, closing)
-        addPlaceholder(closing + closingDelimiter.length, expression, true, `${displayDelimiter}${expression}${closingDelimiter}`)
-        continue
-      }
-    }
-
-    const inlineDelimiter = source.startsWith('\\(', cursor) ? '\\(' : source[cursor] === '$' ? '$' : null
-    if (inlineDelimiter && !isEscaped(source, cursor)) {
-      const expressionStart = cursor + inlineDelimiter.length
-      if (inlineDelimiter !== '$' || (source[expressionStart] && !/\s/.test(source[expressionStart]))) {
-        const closingDelimiter = inlineDelimiter === '$' ? '$' : '\\)'
-        const closing = findClosing(source, closingDelimiter, expressionStart)
-        if (closing >= expressionStart && !/\s/.test(source[closing - 1] || '') && (inlineDelimiter !== '$' || !/\d/.test(source[closing + 1] || ''))) {
-          const expression = source.slice(expressionStart, closing)
-          addPlaceholder(closing + closingDelimiter.length, expression, false, `${inlineDelimiter}${expression}${closingDelimiter}`)
-          continue
-        }
-      }
-    }
-
-    result += source[cursor]
-    cursor += 1
-    lineStart = false
   }
+  return null
+}
 
-  return { source: result, placeholders }
+function findMathClose(source: string, delimiter: MathDelimiter, start: number): number {
+  let cursor = start
+  while (cursor <= source.length) {
+    const found = source.indexOf(delimiter.close, cursor)
+    if (found < 0) {
+      return -1
+    }
+    if (!isEscaped(source, found)) {
+      return found
+    }
+    cursor = found + delimiter.close.length
+  }
+  return -1
+}
+
+// Math is detected by the Markdown parser itself rather than by rewriting the
+// source beforehand, so code spans, fenced code blocks, and raw HTML blocks are
+// never mistaken for formulas.
+function mathInlineRule(math: MathCollector) {
+  return (state: StateInline, silent: boolean): boolean => {
+    const source = state.src
+    const delimiter = matchDelimiter(source, state.pos, INLINE_MATH_DELIMITERS)
+    if (!delimiter) {
+      return false
+    }
+
+    const expressionStart = state.pos + delimiter.open.length
+    // `$ 5` is currency, not a formula, and a formula never opens with whitespace.
+    if (!source[expressionStart] || /\s/.test(source[expressionStart])) {
+      return false
+    }
+
+    const close = findMathClose(source, delimiter, expressionStart)
+    if (close <= expressionStart || /\s/.test(source[close - 1] || '')) {
+      return false
+    }
+    if (delimiter.close === '$' && /\d/.test(source[close + 1] || '')) {
+      return false
+    }
+
+    if (!silent) {
+      const expression = source.slice(expressionStart, close)
+      const fallback = source.slice(state.pos, close + delimiter.close.length)
+      state.pending += math.add(expression, delimiter.display, fallback)
+    }
+    state.pos = close + delimiter.close.length
+    return true
+  }
+}
+
+function mathBlockRule(math: MathCollector) {
+  return (state: StateBlock, startLine: number, endLine: number, silent: boolean): boolean => {
+    const start = state.bMarks[startLine] + state.tShift[startLine]
+    if (state.sCount[startLine] - state.blkIndent >= 4) {
+      return false
+    }
+
+    const source = state.src
+    const delimiter = matchDelimiter(source, start, BLOCK_MATH_DELIMITERS)
+    if (!delimiter) {
+      return false
+    }
+
+    const expressionStart = start + delimiter.open.length
+    const close = findMathClose(source, delimiter, expressionStart)
+    if (close <= expressionStart) {
+      return false
+    }
+
+    // Only take the whole block when the closing delimiter ends its line, so
+    // text after it on the same line is never dropped. Otherwise the inline rule
+    // handles the delimiters inside a paragraph.
+    const lineEnd = source.indexOf('\n', close)
+    const trailing = source.slice(close + delimiter.close.length, lineEnd < 0 ? source.length : lineEnd)
+    if (trailing.trim()) {
+      return false
+    }
+
+    if (silent) {
+      return true
+    }
+
+    let closeLine = startLine
+    while (closeLine < endLine - 1 && close >= state.eMarks[closeLine]) {
+      closeLine += 1
+    }
+
+    const token = state.push('math_block', 'math', 0)
+    token.block = true
+    token.map = [startLine, closeLine + 1]
+    token.content = math.add(source.slice(expressionStart, close), true, source.slice(start, close + delimiter.close.length))
+    state.line = closeLine + 1
+    return true
+  }
 }
 
 function languageClass(info: string): string {
@@ -366,7 +369,7 @@ function languageClass(info: string): string {
   return /^[A-Za-z0-9_+-]+$/.test(language) ? `language-${language}` : ''
 }
 
-function createMarkdown(): MarkdownIt {
+function createMarkdown(math: MathCollector): MarkdownIt {
   const markdown = new MarkdownIt({
     html: true,
     linkify: true,
@@ -374,6 +377,11 @@ function createMarkdown(): MarkdownIt {
     breaks: false
   })
   markdown.use(taskLists, { enabled: false })
+  markdown.block.ruler.before('fence', 'math_block', mathBlockRule(math), {
+    alt: ['paragraph', 'reference', 'blockquote', 'list']
+  })
+  markdown.inline.ruler.before('escape', 'math_inline', mathInlineRule(math))
+  markdown.renderer.rules.math_block = (tokens, index) => tokens[index].content
   markdown.renderer.rules.fence = (tokens, index) => {
     const token = tokens[index]
     const info = token.info.trim()
@@ -498,9 +506,9 @@ export function markdownViewStyles(): string {
 }
 
 export function renderMarkdownView({ filename, sourceUrl, source }: MarkdownViewInput): string {
-  const prepared = replaceMath(source)
-  const rendered = createMarkdown().render(prepared.source)
-  const body = restorePlaceholders(sanitizeRenderedHtml(rendered), prepared.placeholders)
+  const math = createMathCollector()
+  const rendered = createMarkdown(math).render(source)
+  const body = restorePlaceholders(sanitizeRenderedHtml(rendered), math.placeholders)
   return `<main class="markdown-page">
   <header class="markdown-header">
     <h1>${escapeHtml(filename)}</h1>

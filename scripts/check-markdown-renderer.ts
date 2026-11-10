@@ -6,6 +6,14 @@ function assert(condition: boolean, message: string): void {
   }
 }
 
+// The rendered document embeds the escaped source in a textarea, so assertions
+// about markup have to look at the article body only.
+function renderedBody(html: string): string {
+  const start = html.indexOf('<article class="markdown-content">')
+  const end = html.lastIndexOf('</article>')
+  return start >= 0 && end > start ? html.slice(start, end) : html
+}
+
 const source = `# Guide
 
 | Name | Value |
@@ -89,3 +97,41 @@ const invalidMathHtml = renderMarkdownView({
 
 assert(invalidMathHtml.includes('class="math-error"'), 'invalid math fallback was not rendered')
 assert(invalidMathHtml.includes('Before') && invalidMathHtml.includes('after'), 'invalid math broke surrounding Markdown')
+
+const dollarInHtmlTable = renderedBody(renderMarkdownView({
+  filename: 'table.md',
+  sourceUrl: 'https://gist.githubusercontent.com/user/id/raw/table.md',
+  source: `<table>
+<tr><td>math mode</td><td><code>$</code></td></tr>
+</table>
+
+A paragraph after the table.
+
+### Heading after the table
+
+\`\`\`latex
+% \$ x_1^2 \$ stays code
+\`\`\`
+
+Inline \`\$...\$\` stays code.`
+}))
+
+assert(dollarInHtmlTable.includes('<table>'), 'raw HTML table was escaped')
+assert(!dollarInHtmlTable.includes('&lt;table'), 'raw HTML table was escaped into text')
+assert(dollarInHtmlTable.includes('<h3>Heading after the table</h3>'), 'a lone dollar swallowed following Markdown')
+assert(dollarInHtmlTable.includes('<code>$</code>'), 'a code element inside a raw HTML block was rewritten as math')
+assert(dollarInHtmlTable.includes('% $ x_1^2 $ stays code'), 'a fenced code block was treated as math')
+assert(dollarInHtmlTable.includes('<code>$...$</code>'), 'an inline code span was treated as math')
+
+const displayMathHtml = renderedBody(renderMarkdownView({
+  filename: 'display.md',
+  sourceUrl: 'https://gist.githubusercontent.com/user/id/raw/display.md',
+  source: `$$
+a^2 + b^2
+$$
+
+Text after display math.`
+}))
+
+assert(displayMathHtml.includes('class="math-display"'), 'display math block was not rendered')
+assert(displayMathHtml.includes('<p>Text after display math.</p>'), 'display math block swallowed following Markdown')

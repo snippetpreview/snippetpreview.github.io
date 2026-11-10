@@ -60,6 +60,10 @@ The Markdown renderer SHALL recognize inline `$...$` and `\(...\)` delimiters an
 - **WHEN** one formula cannot be parsed
 - **THEN** the rest of the Markdown document renders successfully and the invalid formula is shown as an escaped, visibly marked source fallback
 
+#### Scenario: Math delimiters outside prose are ignored
+- **WHEN** a dollar sign appears in an inline code span, a fenced code block, or a raw HTML block such as `<code>$</code>` inside a `<table>`
+- **THEN** the character is rendered as written and no formula is produced, even when the document contains no matching delimiter
+
 ### Requirement: Raw Markdown HTML is sanitized
 
 The renderer SHALL sanitize raw HTML produced from Markdown using a worker-safe explicit allowlist. The allowlist MAY retain safe documentation elements and relative links/images, but SHALL remove scripts, event-handler attributes, unsafe URL schemes, embedded frames, and executable styles.
